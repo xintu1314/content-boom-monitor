@@ -32,6 +32,22 @@ def cli(args: list[str]) -> dict[str, Any]:
     return json.loads(completed.stdout)
 
 
+def scalar_cell(value: Any) -> str:
+    """Flatten common Base cell shapes used by text and select fields."""
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return scalar_cell(value[0]) if value else ""
+    if isinstance(value, dict):
+        for key in ("name", "text", "value", "url", "link"):
+            if key in value:
+                flattened = scalar_cell(value[key])
+                if flattened:
+                    return flattened
+        return ""
+    return str(value).strip()
+
+
 def existing_records(base_token: str, table_id: str) -> dict[str, str]:
     found: dict[str, str] = {}
     offset = 0
@@ -47,9 +63,11 @@ def existing_records(base_token: str, table_id: str) -> dict[str, str]:
         record_ids = payload.get("record_id_list", [])
         for record_id, row in zip(record_ids, rows):
             mapped = dict(zip(fields, row)) if isinstance(row, list) else row
-            post_id, platform = mapped.get("作品ID"), mapped.get("平台")
+            post_id = scalar_cell(mapped.get("作品ID"))
+            platform = scalar_cell(mapped.get("平台"))
             if post_id and platform:
-                found[f"{platform}:{post_id}"] = record_id
+                # Preserve the oldest record if historical duplicates already exist.
+                found.setdefault(f"{platform}:{post_id}", record_id)
         if not payload.get("has_more"):
             break
         offset += len(rows)
