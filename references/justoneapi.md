@@ -11,12 +11,14 @@
 
 | Purpose | Platform | Endpoint | Pilot parameters |
 |---|---|---|---|
-| Keyword search | Xiaohongshu | `/api/xiaohongshu/search-note/v4` | `sortType=time_descending`, `timeFilter=ONE_WEEK`, page 1 |
-| Keyword search | Douyin | `/api/douyin/search-video/v4` | `sortType=_2`, `publishTime=_7`, page 1 |
+| Keyword boom search | Xiaohongshu | `/api/xiaohongshu/search-note/v4` | `sortType=popularity_descending`, `timeFilter=ONE_WEEK`, page 1 |
+| Keyword boom search | Douyin | `/api/douyin/search-video/v4` | `sortType=_1` (likes most), `publishTime=_7`, page 1 |
 | Account works | Xiaohongshu | `/api/xiaohongshu/get-user-note-list/v4` | `userId`, first cursor only |
 | Account works | Douyin | `/api/douyin/get-user-video-list/v3` | `secUid`, `maxCursor=0` |
 
 Use user-search V2 only to resolve an account name. Do not guess a creator when results are ambiguous.
+
+Keyword monitoring searches for high-engagement posts matching the user's term. Keep the platform popularity/like ordering request, then rank normalized results by the available interaction value. Do not describe this path as new-topic discovery or trend detection.
 
 ## Business response handling
 

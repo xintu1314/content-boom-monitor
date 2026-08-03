@@ -1,6 +1,6 @@
 ---
 name: content-boom-monitor
-description: Monitor Xiaohongshu (小红书) and Douyin (抖音) keywords and competitor accounts through Just One API, normalize and deduplicate posts, detect unusual performance, prepare AI-assisted content insights, and publish a compact content radar into Feishu Base. Use when the user asks to 建立或运行关键词监控、对标账号监控、爆款雷达、竞品内容监控、热门选题发现、异常作品检测、内容库更新、飞书内容监控日报, or calibrate these monitoring rules.
+description: Search Xiaohongshu (小红书) and Douyin (抖音) keywords for high-engagement posts and monitor competitor accounts for account-relative anomalies through Just One API, then normalize, deduplicate, rank, analyze, and publish selected results to Feishu Base. Use when the user asks to 搜关键词找爆款笔记或视频、建立或运行关键词爆款监控、对标账号监控、爆款雷达、竞品内容监控、异常作品检测、内容库更新、飞书内容监控日报, or calibrate these monitoring rules.
 ---
 
 # Content Boom Monitor
@@ -11,9 +11,11 @@ Run a small, evidence-based content-monitoring pipeline for Xiaohongshu and Douy
 
 - Start in pilot mode. Default to at most 3 keywords, 2 accounts per platform, and 1 page per request. Keep at most 5 keyword results and 8 account works per task so account scoring has enough history.
 - Treat keyword monitoring and account monitoring as separate detection engines.
+- Use keyword monitoring to answer “which high-engagement posts match this keyword?” Request platform popularity/like sorting, then rank the returned batch by available interaction value. Call the results `关键词爆款候选`, not new-topic or trend signals.
+- Use competitor-account monitoring to answer “which recent work is unusually strong relative to this account's own baseline?” Apply account-relative R only to this engine.
 - Preserve raw API responses. Never invent missing fields or convert missing metrics to factual zeros.
 - Use account-relative performance only when at least 5 usable historical works are available.
-- Do not claim to predict virality. Report observed anomalies, growth signals, and evidence quality.
+- Do not claim that one search proves platform-wide virality. Report keyword-search boom candidates, observed account anomalies, and evidence quality.
 - Keep API tokens in `JUSTONE_API_TOKEN`; never write tokens into this skill, reports, logs, or Feishu.
 - Keep Feishu identifiers in `CBM_FEISHU_BASE_TOKEN`, `CBM_FEISHU_KEYWORD_TABLE_ID`, `CBM_FEISHU_ACCOUNT_TABLE_ID`, and `CBM_FEISHU_CONTENT_TABLE_ID`, or pass their matching CLI flags. Do not hard-code a user's Base or table IDs.
 - Before writing to Feishu, read and follow the `lark-base` skill. Only pass `--write` when the user has authorized the write or an existing scheduled workflow explicitly covers it.
@@ -73,7 +75,7 @@ The script reads `JUSTONE_API_TOKEN`, calls only the limited pilot endpoints, an
 - `normalized.json`: deduplicated cross-platform posts.
 - `scored.json`: account-relative scoring results.
 - `feishu_rows.json`: rows mapped to the current content library.
-- `report.md`: decision-ready scan brief with scope, platform/source statistics, keyword performance, account anomalies, Top 10 items, data-quality notes, and evidence-bounded next steps.
+- `report.md`: decision-ready scan brief with per-keyword boom-candidate rankings, account anomalies, Top 10 items, data-quality notes, and evidence-bounded next steps.
 
 Use `--fixtures-dir` for offline validation without network access or a token.
 
@@ -111,6 +113,7 @@ The publisher deduplicates by `平台 + 作品ID`, updates existing rows individ
 
 Analyze no more than the top 5 pilot items. Prefer items that are:
 
+- Top-ranked keyword boom candidates with complete interaction evidence.
 - T2/T3 account anomalies.
 - Discovered by both keyword and account monitoring.
 - Recent and supported by multiple engagement fields.

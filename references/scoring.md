@@ -31,6 +31,17 @@ R = current interaction / median(other usable works from the same account)
 - If the baseline is missing or zero, leave R blank and mark low confidence.
 - Keyword-search results do not receive an account-relative grade unless account history is also present.
 
+## Keyword boom candidates
+
+For keyword-search results:
+
+1. Request popularity descending on Xiaohongshu and likes descending on Douyin.
+2. Keep only results that match the user's keyword query.
+3. Re-rank the returned batch by available interaction value, descending.
+4. Mark them `关键词爆款候选` and show the supporting metrics.
+
+This is a within-query candidate ranking, not a platform-wide virality probability. Do not label it `新发现`, and do not require account history.
+
 ## Grades
 
 Use a minimum evidence floor of `max(20, baseline × 2)`.
@@ -42,6 +53,7 @@ Use a minimum evidence floor of `max(20, baseline × 2)`.
 | T1 潜力 | `R >= 2` and evidence floor met |
 | 虚高 | `R >= 2` but evidence floor not met |
 | 普通 | usable baseline exists and `R < 2` |
-| 新发现 | keyword result or insufficient history |
+| 关键词爆款候选 | keyword popularity/like search result, ranked by available interaction value |
+| 样本不足 | competitor-account result with insufficient usable history |
 
 These labels prioritize review; they are not probabilities or guarantees.

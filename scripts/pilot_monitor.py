@@ -264,8 +264,13 @@ def score_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     for record in records:
         record["relative_r"] = None
-        record["monitor_grade"] = "新发现"
-        record["score_note"] = "关键词新发现或历史样本不足"
+        keyword_sources = [s for s in record["monitor_sources"] if s["type"] == "keyword"]
+        record["monitor_grade"] = "关键词爆款候选" if keyword_sources else "样本不足"
+        if keyword_sources:
+            terms = "、".join(dict.fromkeys(str(s.get("keyword", "")).strip() for s in keyword_sources if s.get("keyword")))
+            record["score_note"] = f"关键词“{terms}”热度搜索结果，按可用互动值排序" if terms else "关键词热度搜索结果，按可用互动值排序"
+        else:
+            record["score_note"] = "账号历史样本不足"
         account_sources = [s for s in record["monitor_sources"] if s["type"] == "account"]
         if not account_sources or record["interaction_value"] is None:
             continue
@@ -330,9 +335,9 @@ class ApiClient:
 
 def task_spec(platform: str, task_type: str, value: str) -> tuple[str, dict[str, Any]]:
     if task_type == "keyword" and platform == "xiaohongshu":
-        return "/api/xiaohongshu/search-note/v4", {"keyword": value, "page": 1, "sortType": "time_descending", "timeFilter": "ONE_WEEK"}
+        return "/api/xiaohongshu/search-note/v4", {"keyword": value, "page": 1, "sortType": "popularity_descending", "timeFilter": "ONE_WEEK"}
     if task_type == "keyword" and platform == "douyin":
-        return "/api/douyin/search-video/v4", {"keyword": value, "page": 1, "sortType": "_2", "publishTime": "_7"}
+        return "/api/douyin/search-video/v4", {"keyword": value, "page": 1, "sortType": "_1", "publishTime": "_7"}
     if task_type == "account" and platform == "xiaohongshu":
         return "/api/xiaohongshu/get-user-note-list/v4", {"userId": value}
     if task_type == "account" and platform == "douyin":
@@ -443,7 +448,7 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
     def ratio(value: Any) -> str:
         return "—" if value is None else f"{value:.2f}"
 
-    grade_order = {"T3 现象级": 0, "T2 爆款": 1, "T1 潜力": 2, "虚高": 3, "新发现": 4, "普通": 5}
+    grade_order = {"T3 现象级": 0, "T2 爆款": 1, "T1 潜力": 2, "关键词爆款候选": 3, "虚高": 4, "普通": 5, "样本不足": 6}
     grades: dict[str, int] = defaultdict(int)
     platforms: dict[str, int] = defaultdict(int)
     for record in records:
@@ -488,28 +493,35 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
             "T1 潜力": "账号内相对表现 R≥2，且达到互动证据门槛",
             "虚高": "相对比值较高，但绝对互动证据不足",
             "普通": "已有账号基线，R<2",
-            "新发现": "关键词结果或账号历史样本不足，暂不做相对评级",
+            "关键词爆款候选": "关键词热度搜索结果，按可用互动值优先审阅",
+            "样本不足": "对标账号可用作品不足，暂不做相对评级",
         }
         for grade, count in sorted(grades.items(), key=lambda item: grade_order.get(item[0], 99)):
             lines.append(f"| {md(grade)} | {count} | {meanings.get(grade, '—')} |")
     else:
         lines.append("| 暂无可识别作品 | 0 | — |")
 
-    lines.extend(["", "## 关键词监控表现", ""])
+    lines.extend(["", "## 关键词爆款结果", ""])
     if keyword_groups:
-        lines.extend([
-            "| 关键词 | 平台 | 作品数 | 互动值中位数 | 最高互动值 | 最高互动作品 |",
-            "|---|---|---:|---:|---:|---|",
-        ])
         for (keyword, platform), items in sorted(keyword_groups.items()):
             values = [item["interaction_value"] for item in items if item.get("interaction_value") is not None]
-            top = max(items, key=lambda item: item.get("interaction_value") or -1)
             median_value = round(statistics.median(values), 1) if values else "—"
-            top_value = top.get("interaction_value") if top.get("interaction_value") is not None else "—"
-            top_title = md(top.get("title") or top.get("post_id"))
-            lines.append(
-                f"| {md(keyword)} | {platform_label(platform)} | {len(items)} | {median_value} | {top_value} | [{top_title}]({top.get('post_url', '')}) |"
-            )
+            ranked_items = sorted(items, key=lambda item: (-(item.get("interaction_value") or -1), item.get("search_rank") or 999))
+            lines.extend([
+                f"### {md(keyword)}（{platform_label(platform)}）",
+                "",
+                f"- 返回 {len(items)} 条爆款候选；互动值中位数：{median_value}",
+                "",
+                "| 排名 | 互动值 | 点赞 | 收藏 | 评论 | 分享 | 标题 | 作者 |",
+                "|---:|---:|---:|---:|---:|---:|---|---|",
+            ])
+            for index, item in enumerate(ranked_items, start=1):
+                title = md(item.get("title") or item.get("post_id"))
+                lines.append(
+                    f"| {index} | {md(item.get('interaction_value'))} | {md(item.get('likes'))} | {md(item.get('collects'))} | "
+                    f"{md(item.get('comments'))} | {md(item.get('shares'))} | [{title}]({item.get('post_url', '')}) | {md(item.get('author_name'))} |"
+                )
+            lines.append("")
     else:
         lines.append("- 本次没有关键词监控结果。")
 
@@ -569,7 +581,7 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
         (keyword, platform), items = best_group
         best = max(items, key=lambda item: item.get("interaction_value") or 0)
         lines.append(
-            f"- 关键词信号：`{md(keyword)}` 在{platform_label(platform)}中的最高互动作品为"
+            f"- 关键词爆款候选：`{md(keyword)}` 在{platform_label(platform)}中的最高互动作品为"
             f"[{md(best.get('title') or best.get('post_id'))}]({best.get('post_url', '')})，互动值 {md(best.get('interaction_value'))}。"
         )
     lines.append("- 建议只对 Top 5 做正文级 AI 拆解；当前报告只依据标题、作者和公开互动字段，不推断未获取的正文、受众或爆款原因。")
@@ -581,8 +593,9 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
         f"- {missing_published} 条作品缺少发布时间；保持为空，不按采集时间替代。",
         f"- {missing_links} 条缺作品链接，{missing_authors} 条缺作者，{no_interaction} 条无法计算互动值。",
         "- 小红书互动值 = 点赞 + 2×收藏 + 2×评论；抖音互动值 = 点赞 + 2×收藏 + 3×评论 + 4×分享。",
+        "- 关键词监控调用平台热度/点赞排序，再按本批可用互动值排序；返回的是该关键词搜索范围内的爆款候选，不代表全网爆款认证。",
         "- R 仅用于对标账号：当前作品互动值 ÷ 同账号其他可用作品互动值中位数；至少需要 5 条对比作品。",
-        "- `新发现` 不等于低质量，只表示当前缺少可用的账号历史基线。",
+        "- `样本不足` 只用于缺少可用历史基线的对标账号作品，不用于关键词搜索结果。",
     ])
     if notices:
         lines.extend(["", "## 小样本限制", "", *[f"- {notice}" for notice in notices]])

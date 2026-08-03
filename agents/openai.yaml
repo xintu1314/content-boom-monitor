@@ -1,7 +1,7 @@
 interface:
   display_name: "内容爆款监控"
-  short_description: "监控抖音与小红书关键词和对标账号，自动发现异常内容"
-  default_prompt: "Use $content-boom-monitor to run a small pilot scan of my Xiaohongshu and Douyin keywords and competitor accounts."
+  short_description: "搜索关键词爆款内容，并监控对标账号异常作品"
+  default_prompt: "Use $content-boom-monitor to find boom candidates for my Xiaohongshu and Douyin keywords and monitor competitor-account anomalies."
 
 policy:
   allow_implicit_invocation: true
