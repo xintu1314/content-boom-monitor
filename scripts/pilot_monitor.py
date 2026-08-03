@@ -426,7 +426,7 @@ def to_feishu_row(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], notices: list[str], failures: list[str]) -> str:
+def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], notices: list[str], failures: list[str], mode: str) -> str:
     def md(value: Any) -> str:
         text = "—" if value in (None, "") else str(value)
         return text.replace("|", "\\|").replace("\n", " ")
@@ -472,10 +472,11 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
     missing_authors = sum(record.get("author_name") in (None, "") for record in records)
     no_interaction = sum(record.get("interaction_value") is None for record in records)
     lines = [
-        "# 内容监控试运行报告",
+        "# 内容监控生产报告" if mode == "production" else "# 内容监控试运行报告",
         "",
         "## 执行摘要",
         "",
+        f"- 运行模式：{mode}",
         f"- 执行任务：{len(tasks)}（关键词 {keyword_tasks}，对标账号 {account_tasks}）",
         f"- 去重后作品：{len(records)}（小红书 {platforms.get('xiaohongshu', 0)}，抖音 {platforms.get('douyin', 0)}）",
         f"- 接口失败：{len(failures)}",
@@ -604,6 +605,52 @@ def render_report(records: list[dict[str, Any]], tasks: list[dict[str, Any]], no
     return "\n".join(lines) + "\n"
 
 
+def prepare_analysis_candidates(records: list[dict[str, Any]], direction: str, max_items: int) -> dict[str, Any]:
+    """Build a larger evidence pool so the agent can select relevant items automatically."""
+    grade_order = {"T3 现象级": 0, "T2 爆款": 1, "T1 潜力": 2, "关键词爆款候选": 3}
+    eligible = [
+        record for record in records
+        if record.get("monitor_grade") in grade_order
+        or len(record.get("monitor_sources", [])) > 1
+    ]
+    eligible.sort(key=lambda item: (
+        grade_order.get(item.get("monitor_grade", ""), 4),
+        -(item.get("relative_r") or 0),
+        -(item.get("interaction_value") or 0),
+    ))
+    pool_limit = max(max_items, max_items * 3)
+    candidates = []
+    for record in eligible[:pool_limit]:
+        candidates.append({
+            "platform": record.get("platform"),
+            "post_id": record.get("post_id"),
+            "title": record.get("title"),
+            "post_url": record.get("post_url"),
+            "author_name": record.get("author_name"),
+            "published_at": record.get("published_at"),
+            "likes": record.get("likes"),
+            "collects": record.get("collects"),
+            "comments": record.get("comments"),
+            "shares": record.get("shares"),
+            "views": record.get("views"),
+            "interaction_value": record.get("interaction_value"),
+            "relative_r": record.get("relative_r"),
+            "monitor_grade": record.get("monitor_grade"),
+            "monitor_sources": record.get("monitor_sources", []),
+        })
+    return {
+        "direction": direction,
+        "max_items": max_items,
+        "selection_rule": "Select the most relevant items first; prefer keyword boom candidates, T1/T2/T3 anomalies, cross-source hits, recent posts, and complete evidence. Skip off-topic items.",
+        "required_output_fields": [
+            "platform", "post_id", "fact_evidence", "inferred_structure",
+            "boom_factors", "reusable_elements", "non_reusable_context",
+            "reusable_topic", "confidence", "missing_evidence",
+        ],
+        "candidates": candidates,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -612,8 +659,15 @@ def main() -> int:
     args = parser.parse_args()
 
     config = read_json(args.config)
-    limits = DEFAULT_LIMITS | {k: int(v) for k, v in config.get("pilot", {}).items() if k in DEFAULT_LIMITS}
-    limits = {key: min(value, DEFAULT_LIMITS[key]) for key, value in limits.items()}
+    mode = str(config.get("mode", "pilot")).strip().lower()
+    if mode not in {"pilot", "production"}:
+        raise SystemExit("config.mode must be pilot or production")
+    configured_limits = config.get("limits") or config.get("pilot", {})
+    limits = DEFAULT_LIMITS | {k: int(v) for k, v in configured_limits.items() if k in DEFAULT_LIMITS}
+    if mode == "pilot":
+        limits = {key: min(value, DEFAULT_LIMITS[key]) for key, value in limits.items()}
+    else:
+        limits = {key: max(0, value) for key, value in limits.items()}
     tasks, notices = build_tasks(config, limits)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     raw_dir = args.output_dir / "raw"
@@ -654,11 +708,16 @@ def main() -> int:
     normalized = merge_records(all_records)
     scored = score_records(normalized)
     feishu_rows = [to_feishu_row(record) for record in scored if record.get("post_id")]
+    direction = str(config.get("profile", {}).get("direction", "")).strip()
+    default_analysis_max = 10 if mode == "production" else 5
+    analysis_max = max(1, min(50, int(config.get("analysis", {}).get("max_items", default_analysis_max))))
+    analysis_candidates = prepare_analysis_candidates(scored, direction, analysis_max)
     write_json(args.output_dir / "normalized.json", normalized)
     write_json(args.output_dir / "scored.json", scored)
     write_json(args.output_dir / "feishu_rows.json", feishu_rows)
-    (args.output_dir / "report.md").write_text(render_report(scored, tasks, notices, failures), encoding="utf-8")
-    print(json.dumps({"tasks": len(tasks), "records": len(scored), "failures": len(failures), "output_dir": str(args.output_dir)}, ensure_ascii=False))
+    write_json(args.output_dir / "analysis_candidates.json", analysis_candidates)
+    (args.output_dir / "report.md").write_text(render_report(scored, tasks, notices, failures, mode), encoding="utf-8")
+    print(json.dumps({"mode": mode, "tasks": len(tasks), "records": len(scored), "analysis_candidates": len(analysis_candidates["candidates"]), "failures": len(failures), "output_dir": str(args.output_dir)}, ensure_ascii=False))
     return 0 if scored else 1
 
 

@@ -143,10 +143,12 @@ def build_config(
     keyword_rows: list[dict[str, Any]],
     account_rows: list[dict[str, Any]],
     direction: str,
+    mode: str,
     max_keywords: int,
     max_accounts_per_platform: int,
     max_results_per_task: int,
     max_pages: int,
+    analysis_max_items: int,
 ) -> tuple[dict[str, Any], list[str]]:
     notices: list[str] = []
     keywords: list[dict[str, Any]] = []
@@ -158,7 +160,7 @@ def build_config(
             continue
         seen_terms.add(key)
         keywords.append({"term": term, "platforms": keyword_platforms(row.get("监控平台"))})
-    if len(keywords) > max_keywords:
+    if mode == "pilot" and len(keywords) > max_keywords:
         notices.append(f"关键词共有 {len(keywords)} 个，本次试跑只取前 {max_keywords} 个。")
         keywords = keywords[:max_keywords]
 
@@ -190,7 +192,7 @@ def build_config(
         identity = (platform, identifier)
         if identity in seen_accounts:
             continue
-        if platform_counts[platform] >= max_accounts_per_platform:
+        if mode == "pilot" and platform_counts[platform] >= max_accounts_per_platform:
             notices.append(f"{platform} 对标账号超过试跑上限 {max_accounts_per_platform} 个，已跳过“{label}”。")
             continue
         seen_accounts.add(identity)
@@ -200,14 +202,18 @@ def build_config(
             account["name"] = name
         accounts.append(account)
 
+    effective_max_keywords = max_keywords if mode == "pilot" else len(keywords)
+    effective_max_accounts = max_accounts_per_platform if mode == "pilot" else max(platform_counts.values(), default=0)
     config = {
+        "mode": mode,
         "profile": {"direction": direction},
-        "pilot": {
-            "max_keywords": max_keywords,
-            "max_accounts_per_platform": max_accounts_per_platform,
+        "limits": {
+            "max_keywords": effective_max_keywords,
+            "max_accounts_per_platform": effective_max_accounts,
             "max_results_per_task": max_results_per_task,
             "max_pages": max_pages,
         },
+        "analysis": {"max_items": analysis_max_items},
         "keywords": keywords,
         "accounts": accounts,
     }
@@ -215,16 +221,18 @@ def build_config(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="从飞书监控表生成试跑配置")
+    parser = argparse.ArgumentParser(description="从飞书监控表生成试跑或生产配置")
     parser.add_argument("--output", required=True, help="生成的 JSON 配置路径")
     parser.add_argument("--base-token", default=DEFAULT_BASE_TOKEN, help="飞书 Base token；也可用 CBM_FEISHU_BASE_TOKEN")
     parser.add_argument("--keyword-table", default=DEFAULT_KEYWORD_TABLE, help="关键词表 ID；也可用 CBM_FEISHU_KEYWORD_TABLE_ID")
     parser.add_argument("--account-table", default=DEFAULT_ACCOUNT_TABLE, help="账号表 ID；也可用 CBM_FEISHU_ACCOUNT_TABLE_ID")
     parser.add_argument("--direction", default="待确认的内容方向")
+    parser.add_argument("--mode", choices=("pilot", "production"), default=os.getenv("CBM_RUN_MODE", "pilot"))
     parser.add_argument("--max-keywords", type=int, default=3)
     parser.add_argument("--max-accounts-per-platform", type=int, default=2)
     parser.add_argument("--max-results-per-task", type=int, default=8)
     parser.add_argument("--max-pages", type=int, default=1)
+    parser.add_argument("--analysis-max-items", type=int)
     args = parser.parse_args()
     missing = [
         name for name, value in (
@@ -244,9 +252,10 @@ def main() -> int:
         keyword_rows = run_record_list(args.base_token, args.keyword_table, KEYWORD_FIELDS)
         account_rows = run_record_list(args.base_token, args.account_table, ACCOUNT_FIELDS)
         config, notices = build_config(
-            keyword_rows, account_rows, args.direction,
+            keyword_rows, account_rows, args.direction, args.mode,
             args.max_keywords, args.max_accounts_per_platform,
             args.max_results_per_task, args.max_pages,
+            args.analysis_max_items or (5 if args.mode == "pilot" else 10),
         )
         output = Path(args.output).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -257,7 +266,7 @@ def main() -> int:
 
     for notice in notices:
         print(f"提示：{notice}", file=sys.stderr)
-    print(f"已生成 {output}：{len(config['keywords'])} 个关键词，{len(config['accounts'])} 个对标账号")
+    print(f"已生成 {output}：{config['mode']} 模式，{len(config['keywords'])} 个关键词，{len(config['accounts'])} 个对标账号")
     return 0
 
 

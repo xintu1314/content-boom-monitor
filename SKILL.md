@@ -9,7 +9,7 @@ Run a small, evidence-based content-monitoring pipeline for Xiaohongshu and Douy
 
 ## Operating principles
 
-- Start in pilot mode. Default to at most 3 keywords, 2 accounts per platform, and 1 page per request. Keep at most 5 keyword results and 8 account works per task so account scoring has enough history.
+- Use pilot mode only for an unvalidated first run. After the pilot succeeds, use production mode: read every enabled Feishu keyword and account, while keeping each task bounded to 5 keyword results, 8 account works, and 1 page by default.
 - Treat keyword monitoring and account monitoring as separate detection engines.
 - Use keyword monitoring to answer “which high-engagement posts match this keyword?” Request platform popularity/like sorting, then rank the returned batch by available interaction value. Call the results `关键词爆款候选`, not new-topic or trend signals.
 - Use competitor-account monitoring to answer “which recent work is unusually strong relative to this account's own baseline?” Apply account-relative R only to this engine.
@@ -27,8 +27,8 @@ Run a small, evidence-based content-monitoring pipeline for Xiaohongshu and Douy
 Accept any of these:
 
 - One sentence describing the user's content direction.
-- 1-3 seed keywords; expand only when the user asks or after the pilot succeeds.
-- Up to 2 competitor accounts per platform for the first run.
+- Seed keywords; production mode reads every enabled row.
+- Competitor accounts; production mode reads every enabled row.
 - Xiaohongshu profile URLs or user IDs.
 - Douyin `secUid` values. If only a name is available, use the Just One API user-search endpoint and require an exact or user-confirmed match.
 
@@ -39,7 +39,7 @@ For the current Feishu library, the normal human input is even smaller:
 - Add one row with `关键词` and optional `监控平台` in the `监控关键词 / 快速录入` view. A blank platform means both platforms.
 - Paste an account homepage into `主页链接` in the `对标账号 / 快速录入` view. `账号名称` and `平台` are optional because the platform can be inferred from the link.
 
-### 2. Prepare the pilot config
+### 2. Prepare the run config
 
 Use the configured Feishu Base as the default input source. First set the Base and table identifiers:
 
@@ -50,36 +50,38 @@ export CBM_FEISHU_ACCOUNT_TABLE_ID="<account-table-id>"
 export CBM_FEISHU_CONTENT_TABLE_ID="<content-table-id>"
 ```
 
-Generate the pilot config directly from its keyword and account tables:
+Generate a production config directly from its keyword and account tables:
 
 ```bash
 python3 scripts/build_config_from_feishu.py \
+  --mode production \
   --direction "<内容方向>" \
-  --output <pilot-config.json>
+  --output <run-config.json>
 ```
 
-The reader is read-only. It skips disabled/paused rows, removes duplicates, infers platform from account URLs, and applies the small pilot caps. If Feishu is unavailable or the user supplies inputs outside this Base, create a JSON file manually using [references/pilot-config.md](references/pilot-config.md).
+The reader is read-only. It skips disabled/paused rows, removes duplicates, infers platform from account URLs, and includes all enabled targets in production mode. Keep `--mode pilot` for an unvalidated first run; it applies the small pilot caps. If Feishu is unavailable or the user supplies inputs outside this Base, create a JSON file manually using [references/pilot-config.md](references/pilot-config.md).
 
 ### 3. Run collection
 
 ```bash
 source ~/.zprofile
 python3 scripts/pilot_monitor.py \
-  --config <pilot-config.json> \
+  --config <run-config.json> \
   --output-dir <output-directory>
 ```
 
-The script reads `JUSTONE_API_TOKEN`, calls only the limited pilot endpoints, and writes:
+The script reads `JUSTONE_API_TOKEN`, calls only the bounded endpoints configured for the run, and writes:
 
 - `raw/`: redacted raw responses for mapping and debugging.
 - `normalized.json`: deduplicated cross-platform posts.
 - `scored.json`: account-relative scoring results.
+- `analysis_candidates.json`: facts-only shortlist and the required AI output schema.
 - `feishu_rows.json`: rows mapped to the current content library.
 - `report.md`: decision-ready scan brief with per-keyword boom-candidate rankings, account anomalies, Top 10 items, data-quality notes, and evidence-bounded next steps.
 
 Use `--fixtures-dir` for offline validation without network access or a token.
 
-### 4. Review before publishing
+### 4. Review collection quality
 
 Check `report.md` and `feishu_rows.json` for:
 
@@ -91,7 +93,44 @@ Check `report.md` and `feishu_rows.json` for:
 
 If the API response shape changed, update only the normalizer in `pilot_monitor.py`; do not change scoring or Feishu fields until the raw sample proves it is necessary.
 
-### 5. Publish to Feishu
+### 5. Apply AI analysis automatically
+
+After every successful collection, continue automatically; do not stop at the metrics-only report. Read `analysis_candidates.json`, select up to its `max_items` entries that clearly match the user's direction, and create `analysis.json` with exactly these fields for every selected item:
+
+```json
+{
+  "analyses": [
+    {
+      "platform": "xiaohongshu",
+      "post_id": "source post ID",
+      "fact_evidence": "only facts present in the candidate",
+      "inferred_structure": "clearly labeled inference about hook and structure",
+      "boom_factors": ["evidence-backed factor"],
+      "reusable_elements": ["transferable element"],
+      "non_reusable_context": ["author/account-specific context"],
+      "reusable_topic": "one adapted topic for the user's direction",
+      "confidence": 0.8,
+      "missing_evidence": ["body text unavailable"]
+    }
+  ]
+}
+```
+
+Do not invent post body, audience, claims, or causal explanations. Facts and inference must remain separate. Skip off-topic candidates instead of forcing the quota. Production defaults to at most 10 analyzed items; pilot defaults to 5.
+
+Merge the analysis into the Feishu rows and report:
+
+```bash
+python3 scripts/apply_analysis.py \
+  --candidates <output-directory>/analysis_candidates.json \
+  --analysis <output-directory>/analysis.json \
+  --rows <output-directory>/feishu_rows.json \
+  --report <output-directory>/report.md
+```
+
+This step fills `AI摘要`, `爆款因素`, `可复用选题`, and `分析置信度`, and appends the evidence-bounded breakdown to the report. Codex performs the semantic analysis; the Python script validates and merges it deterministically, so no separate LLM API token is required when the Skill runs in Codex.
+
+### 6. Preview and publish to Feishu
 
 Preview first:
 
@@ -109,27 +148,13 @@ python3 scripts/publish_feishu.py \
 
 The publisher deduplicates by `平台 + 作品ID`, updates existing rows individually, and batch-creates new rows. It requires the configured Base token and content table ID; preview and write use the same target.
 
-### 6. Apply AI analysis selectively
-
-Analyze no more than the top 5 pilot items. Prefer items that are:
-
-- Top-ranked keyword boom candidates with complete interaction evidence.
-- T2/T3 account anomalies.
-- Discovered by both keyword and account monitoring.
-- Recent and supported by multiple engagement fields.
-- Clearly relevant to the user's stated direction.
-
-Separate facts from inference. Output a concise summary, hook, topic, audience, up to 4 evidence-backed factors, reusable elements, non-reusable context, adapted ideas, confidence, and missing evidence. Write only verified source data and clearly labeled AI analysis to Feishu.
-
-Append this analysis to `report.md` under `Top 5 AI 辅助拆解`, followed by 2-4 prioritized adapted topic ideas. Each item must label factual evidence, inferred structure, reusable elements, non-reusable context, confidence, and missing evidence. Do not leave the report as a metrics-only run log.
-
 ### 7. Ask for lightweight feedback
 
 Ask the user to mark only one status per reviewed item: `值得跟进`, `继续观察`, `不相关`, or `已采用`. Use this feedback to tune keywords and account priority before increasing scan volume.
 
 ## Scaling gate
 
-Do not increase volume until one pilot run has:
+Do not switch from pilot to production until one pilot run has:
 
 - Successful API responses from both platforms.
 - Correct ID and metric mapping from real samples.
@@ -137,7 +162,7 @@ Do not increase volume until one pilot run has:
 - At least one human relevance review.
 - A known daily call-cost estimate from the Just One API console.
 
-After those checks, increase one dimension at a time: keywords, accounts, pages, then detail/comment calls.
+After those checks, production mode may include all enabled keywords and accounts. Keep per-task result and page limits bounded; increase pages or detail/comment calls only after reviewing cost and data quality.
 
 ## References
 

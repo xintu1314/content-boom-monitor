@@ -16,7 +16,7 @@
 - 用账号历史中位数计算相对表现 `R`；
 - 标记 `T1 潜力 / T2 爆款 / T3 现象级` 等审阅等级；
 - 生成包含关键词表现、账号异常、Top 10 和数据限制的监控简报；
-- 让 Codex 对 Top 5 做证据有边界的 AI 辅助拆解；
+- 让 Codex 在生产模式下自动对最多 10 条候选做有证据边界的 AI 拆解；
 - 预览并发布到飞书内容作品库；
 - 读取飞书中的关键词和账号主页，把人的输入压缩到最少。
 
@@ -35,15 +35,15 @@
 
 ```mermaid
 flowchart LR
-    A[飞书快速录入<br/>关键词 / 账号主页] --> B[生成限量配置]
+    A[飞书快速录入<br/>关键词 / 账号主页] --> B[生成试跑或生产配置]
     B --> C[Just One API<br/>小红书 / 抖音]
     C --> D[标准化与保留原始响应]
     D --> E[平台 + 作品ID 去重]
     E --> F[关键词爆款排序<br/>账号相对评分]
-    F --> G[监控简报与 Top 5 拆解]
-    F --> H[飞书内容作品库]
-    G --> I[人工反馈]
-    H --> I
+    F --> G[生成 AI 候选清单]
+    G --> H[Codex 自动拆解<br/>摘要 / 因素 / 选题]
+    H --> I[预览并写入飞书]
+    I --> J[人工轻量反馈]
 ```
 
 稳定、可复现的环节由程序完成；需要语义理解的内容拆解交给 AI；内容是否符合业务最终由人判断。
@@ -54,7 +54,7 @@ flowchart LR
 
 1. 从飞书「对标账号」表读取未停用、未暂停的账号；
 2. 从主页链接识别小红书或抖音，并解析平台账号 ID；
-3. 调用账号作品接口，试跑模式最多保留最近 8 条；
+3. 调用账号作品接口，每个账号最多保留最近 8 条；
 4. 把两个平台的作品转换成统一字段；
 5. 用 `平台 + 作品ID` 去重：新作品准备新增，已有作品准备更新；
 6. 计算每条作品的互动值；
@@ -69,15 +69,23 @@ flowchart LR
 
 ```bash
 python3 scripts/build_config_from_feishu.py \
+  --mode production \
   --direction "你的内容方向" \
-  --output pilot-config.json
+  --output run-config.json
 
 python3 scripts/pilot_monitor.py \
-  --config pilot-config.json \
-  --output-dir pilot-output
+  --config run-config.json \
+  --output-dir run-output
+
+# Codex 根据 analysis_candidates.json 自动生成 analysis.json 后：
+python3 scripts/apply_analysis.py \
+  --candidates run-output/analysis_candidates.json \
+  --analysis run-output/analysis.json \
+  --rows run-output/feishu_rows.json \
+  --report run-output/report.md
 
 python3 scripts/publish_feishu.py \
-  --input pilot-output/feishu_rows.json \
+  --input run-output/feishu_rows.json \
   --write
 ```
 
@@ -174,6 +182,7 @@ pilot-output/
 ├── raw/               # 脱敏后的原始 API 响应
 ├── normalized.json    # 标准化、去重后的作品
 ├── scored.json        # 互动值和账号相对评分
+├── analysis_candidates.json # AI 待分析候选与输出规范
 ├── feishu_rows.json   # 飞书字段映射结果
 └── report.md          # 监控简报
 ```
@@ -202,6 +211,32 @@ python3 scripts/publish_feishu.py \
 ```
 
 发布器使用 `平台 + 作品ID` 去重：已有作品更新，新作品批量创建。
+
+## 切换到生产模式
+
+第一次试跑确认接口、字段、去重和飞书写入都正确后，改用：
+
+```bash
+python3 scripts/build_config_from_feishu.py \
+  --mode production \
+  --analysis-max-items 10 \
+  --direction "你的内容方向" \
+  --output run-config.json
+```
+
+生产模式会读取飞书里**全部启用**的关键词和对标账号，不再使用“3 个关键词、每个平台 2 个账号”的试跑截断。为控制费用和报告质量，每个关键词仍只保留 Top 5，每个账号仍只保留 8 条作品，默认只请求 1 页。
+
+采集脚本会额外输出 `analysis_candidates.json`。Codex 随后自动选择与内容方向相关的候选、生成 `analysis.json`，并运行：
+
+```bash
+python3 scripts/apply_analysis.py \
+  --candidates run-output/analysis_candidates.json \
+  --analysis run-output/analysis.json \
+  --rows run-output/feishu_rows.json \
+  --report run-output/report.md
+```
+
+这一步会自动填充 `AI摘要`、`爆款因素`、`可复用选题` 和 `分析置信度`。事实与推断必须分开；正文缺失时不能根据标题脑补正文。使用 Codex Skill 运行时不需要另配大模型 API，语义分析由 Codex 完成，脚本负责校验和合并。
 
 ## 评分方式
 
@@ -264,6 +299,7 @@ content-boom-monitor/
 │   ├── pilot-config.md
 │   └── scoring.md
 └── scripts/
+    ├── apply_analysis.py
     ├── build_config_from_feishu.py
     ├── pilot_monitor.py
     └── publish_feishu.py
@@ -271,7 +307,7 @@ content-boom-monitor/
 
 ## 当前边界
 
-当前版本已经覆盖：关键词/账号采集、字段标准化、去重、相对评分、监控简报和飞书入库。
+当前版本已经覆盖：生产模式全量读取启用目标、关键词/账号采集、字段标准化、去重、相对评分、自动 AI 辅助拆解、监控简报和飞书入库。
 
 尚未内置：
 
@@ -282,7 +318,7 @@ content-boom-monitor/
 - 飞书群日报与异常告警；
 - 自动创建单条爆款拆解文档。
 
-建议先用小样本验证字段、成本和相关性，再逐步扩大关键词、账号、页数和详情接口调用。
+独立运行 Python 脚本时，仍需要一个 Agent 或大模型根据 `analysis_candidates.json` 生成 `analysis.json`；在 Codex Skill 中这一步会自动完成。建议先用小样本验证字段、成本和相关性，再切换生产模式，谨慎增加页数和详情接口调用。
 
 ## 安全与使用说明
 

@@ -1,7 +1,7 @@
 interface:
   display_name: "内容爆款监控"
   short_description: "搜索关键词爆款内容，并监控对标账号异常作品"
-  default_prompt: "Use $content-boom-monitor to find boom candidates for my Xiaohongshu and Douyin keywords and monitor competitor-account anomalies."
+  default_prompt: "Use $content-boom-monitor in production mode: read all enabled Feishu keywords and competitor accounts, collect bounded results, automatically analyze relevant candidates, preview, and publish the report and rows to Feishu when authorized."
 
 policy:
   allow_implicit_invocation: true
