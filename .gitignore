@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+raw/
+pilot-output/
+pilot-config.json
+normalized.json
+scored.json
+feishu_rows.json
+report.md
